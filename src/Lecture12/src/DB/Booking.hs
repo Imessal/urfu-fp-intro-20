@@ -11,7 +11,7 @@ import Servant.API
 import GHC.Generics
 
 import DB.MovieSession
-import DB.Seat
+import DB.Seat (SeatId)
 import DB.Internal
 
 {-
@@ -56,8 +56,39 @@ instance FromJSON Booking
   Если оно существует и прошло меньше 10 минут от создания, то бронирование
   проходит успешно, иначе необходимо вернуть сообщение об ошибке в JSON формате.
 -}
+
+ttl :: NominalDiffTime
+ttl = fromInteger 600
+
 tryBook
   :: DBMonad m
+  => Booking
+  -> m (Maybe String)
+tryBook booking = runSQL $ \conn -> do
+  if not (isPreliminary booking)
+    then return (Just "Already paid")
+  else do
+    time <- getCurrentTime
+    if (diffUTCTime time (createdAt booking)) < ttl
+        then do
+          execute conn "UPDATE bookings SET is_preliminary = false WHERE id = ?" (bookingId booking)
+          execute conn "UPDATE seats SET available = false WHERE id = ?" (seatId booking)
+          return Nothing
+        else do
+          execute conn "DELETE FROM bookings WHERE id = ?" (bookingId booking)
+          return (Just "Expired")
+
+getBook
+  :: DBMonad m
   => BookingId
-  -> m Bool
-tryBook = undefined
+  -> m [Booking]
+getBook bookingId = runSQL $ \conn ->
+  query conn "SELECT * from bookings where id = ? " bookingId
+
+deleteBook
+  ::DBMonad m
+  => BookingId
+  -> m ()
+
+deleteBook bookingId = runSQL $ \conn -> 
+  execute conn "DELETE FROM bookings WHERE id = ?" (bookingId)
